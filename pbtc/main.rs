@@ -20,6 +20,7 @@ extern crate sync;
 extern crate import;
 extern crate rpc as ethcore_rpc;
 extern crate primitives;
+extern crate verification;
 
 mod commands;
 mod config;
@@ -29,6 +30,7 @@ mod rpc;
 mod rpc_apis;
 
 use app_dirs::AppInfo;
+use std::sync::Arc;
 
 pub const APP_INFO: AppInfo = AppInfo { name: "pbtc", author: "Parity" };
 pub const PROTOCOL_VERSION: u32 = 70_014;
@@ -61,8 +63,10 @@ fn run() -> Result<(), String> {
 		env_logger::init().expect("Logger can be initialized only once");
 	}
 
+    let limits = Arc::new(verification::LegacyLimits::new());
+
 	match matches.subcommand() {
-		("import", Some(import_matches)) => commands::import(cfg, import_matches),
+		("import", Some(import_matches)) => commands::import(cfg, import_matches, limits.clone()),
 		_ => commands::start(cfg),
 	}
 }

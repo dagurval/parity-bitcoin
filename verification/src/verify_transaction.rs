@@ -4,7 +4,8 @@ use chain::IndexedTransaction;
 use duplex_store::NoopStore;
 use sigops::transaction_sigops;
 use error::TransactionError;
-use constants::{MAX_BLOCK_SIZE, MAX_BLOCK_SIGOPS, MIN_COINBASE_SIZE, MAX_COINBASE_SIZE};
+use constants::{MIN_COINBASE_SIZE, MAX_COINBASE_SIZE};
+use ConsensusLimitsRef;
 
 pub struct TransactionVerifier<'a> {
 	pub empty: TransactionEmpty<'a>,
@@ -39,14 +40,14 @@ pub struct MemoryPoolTransactionVerifier<'a> {
 }
 
 impl<'a> MemoryPoolTransactionVerifier<'a> {
-	pub fn new(transaction: &'a IndexedTransaction) -> Self {
+	pub fn new(transaction: &'a IndexedTransaction, limits: &ConsensusLimitsRef) -> Self {
 		trace!(target: "verification", "Mempool-Tx pre-verification {}", transaction.hash.to_reversed_str());
 		MemoryPoolTransactionVerifier {
 			empty: TransactionEmpty::new(transaction),
 			null_non_coinbase: TransactionNullNonCoinbase::new(transaction),
 			is_coinbase: TransactionMemoryPoolCoinbase::new(transaction),
-			size: TransactionSize::new(transaction, MAX_BLOCK_SIZE),
-			sigops: TransactionSigops::new(transaction, MAX_BLOCK_SIGOPS),
+			size: TransactionSize::new(transaction, limits.max_transaction_size()),
+			sigops: TransactionSigops::new(transaction, limits.max_block_sigops())
 		}
 	}
 

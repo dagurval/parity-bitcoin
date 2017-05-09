@@ -13,6 +13,7 @@ use verify_transaction::MemoryPoolTransactionVerifier;
 use accept_chain::ChainAcceptor;
 use accept_transaction::MemoryPoolTransactionAcceptor;
 use deployments::Deployments;
+use ConsensusLimitsRef;
 use Verify;
 
 pub struct BackwardsCompatibleChainVerifier {
@@ -30,10 +31,10 @@ impl BackwardsCompatibleChainVerifier {
 		}
 	}
 
-	fn verify_block(&self, block: &IndexedBlock) -> Result<(), Error> {
+	fn verify_block(&self, block: &IndexedBlock, limits: &ConsensusLimitsRef) -> Result<(), Error> {
 		let current_time = ::time::get_time().sec as u32;
 		// first run pre-verification
-		let chain_verifier = ChainVerifier::new(block, self.network, current_time);
+		let chain_verifier = ChainVerifier::new(block, self.network, current_time, limits);
 		chain_verifier.check()?;
 
 		assert_eq!(Some(self.store.best_block().hash), self.store.block_hash(self.store.best_block().number));
@@ -46,21 +47,21 @@ impl BackwardsCompatibleChainVerifier {
 			},
 			BlockOrigin::CanonChain { block_number } => {
 				let canon_block = CanonBlock::new(block);
-				let chain_acceptor = ChainAcceptor::new(self.store.as_store(), self.network, canon_block, block_number, &self.deployments);
+				let chain_acceptor = ChainAcceptor::new(self.store.as_store(), self.network, canon_block, block_number, &self.deployments, limits);
 				chain_acceptor.check()?;
 			},
 			BlockOrigin::SideChain(origin) => {
 				let block_number = origin.block_number;
 				let fork = self.store.fork(origin)?;
 				let canon_block = CanonBlock::new(block);
-				let chain_acceptor = ChainAcceptor::new(fork.store(), self.network, canon_block, block_number, &self.deployments);
+				let chain_acceptor = ChainAcceptor::new(fork.store(), self.network, canon_block, block_number, &self.deployments, limits);
 				chain_acceptor.check()?;
 			},
 			BlockOrigin::SideChainBecomingCanonChain(origin) => {
 				let block_number = origin.block_number;
 				let fork = self.store.fork(origin)?;
 				let canon_block = CanonBlock::new(block);
-				let chain_acceptor = ChainAcceptor::new(fork.store(), self.network, canon_block, block_number, &self.deployments);
+				let chain_acceptor = ChainAcceptor::new(fork.store(), self.network, canon_block, block_number, &self.deployments, limits);
 				chain_acceptor.check()?;
 			},
 		}
@@ -89,10 +90,11 @@ impl BackwardsCompatibleChainVerifier {
 		height: u32,
 		time: u32,
 		transaction: &Transaction,
+        limits: &ConsensusLimitsRef,
 	) -> Result<(), TransactionError> where T: TransactionOutputProvider {
 		let indexed_tx = transaction.clone().into();
 		// let's do preverification first
-		let tx_verifier = MemoryPoolTransactionVerifier::new(&indexed_tx);
+		let tx_verifier = MemoryPoolTransactionVerifier::new(&indexed_tx, limits);
 		try!(tx_verifier.check());
 
 		let canon_tx = CanonTransaction::new(&indexed_tx);
@@ -107,15 +109,16 @@ impl BackwardsCompatibleChainVerifier {
 			height,
 			time,
 			&self.deployments,
-			self.store.as_block_header_provider()
+			self.store.as_block_header_provider(),
+            limits.max_block_sigops(),
 		);
 		tx_acceptor.check()
 	}
 }
 
 impl Verify for BackwardsCompatibleChainVerifier {
-	fn verify(&self, block: &IndexedBlock) -> Result<(), Error> {
-		let result = self.verify_block(block);
+	fn verify(&self, block: &IndexedBlock, limits: &ConsensusLimitsRef) -> Result<(), Error> {
+		let result = self.verify_block(block, limits);
 		trace!(
 			target: "verification", "Block {} (transactions: {}) verification finished. Result {:?}",
 			block.hash().to_reversed_str(),
@@ -136,14 +139,15 @@ mod tests {
 	use network::Magic;
 	use script;
 	use super::BackwardsCompatibleChainVerifier as ChainVerifier;
-	use {Verify, Error, TransactionError};
+	use {Verify, Error, TransactionError, ConsensusLimitsRef, LegacyLimits};
 
 	#[test]
 	fn verify_orphan() {
 		let storage = Arc::new(BlockChainDatabase::init_test_chain(vec![test_data::genesis().into()]));
 		let b2 = test_data::block_h2().into();
 		let verifier = ChainVerifier::new(storage, Magic::Unitest);
-		assert_eq!(Err(Error::Database(DBError::UnknownParent)), verifier.verify(&b2));
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert_eq!(Err(Error::Database(DBError::UnknownParent)), verifier.verify(&b2, &limits));
 	}
 
 	#[test]
@@ -151,7 +155,8 @@ mod tests {
 		let storage = Arc::new(BlockChainDatabase::init_test_chain(vec![test_data::genesis().into()]));
 		let b1 = test_data::block_h1();
 		let verifier = ChainVerifier::new(storage, Magic::Unitest);
-		assert!(verifier.verify(&b1.into()).is_ok());
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert!(verifier.verify(&b1.into(), &limits).is_ok());
 	}
 
 
@@ -164,7 +169,8 @@ mod tests {
 			]);
 		let b1 = test_data::block_h2();
 		let verifier = ChainVerifier::new(Arc::new(storage), Magic::Unitest);
-		assert!(verifier.verify(&b1.into()).is_ok());
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert!(verifier.verify(&b1.into(), &limits).is_ok());
 	}
 
 	#[test]
@@ -199,7 +205,8 @@ mod tests {
 			TransactionError::Maturity,
 		));
 
-		assert_eq!(expected, verifier.verify(&block.into()));
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert_eq!(expected, verifier.verify(&block.into(), &limits));
 	}
 
 	#[test]
@@ -231,7 +238,8 @@ mod tests {
 			.build();
 
 		let verifier = ChainVerifier::new(Arc::new(storage), Magic::Unitest);
-		assert!(verifier.verify(&block.into()).is_ok());
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert!(verifier.verify(&block.into(), &limits).is_ok());
 	}
 
 	#[test]
@@ -267,7 +275,8 @@ mod tests {
 			.build();
 
 		let verifier = ChainVerifier::new(Arc::new(storage), Magic::Unitest);
-		assert!(verifier.verify(&block.into()).is_ok());
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert!(verifier.verify(&block.into(), &limits).is_ok());
 	}
 
 	#[test]
@@ -308,7 +317,8 @@ mod tests {
 		let verifier = ChainVerifier::new(Arc::new(storage), Magic::Unitest);
 
 		let expected = Err(Error::Transaction(2, TransactionError::Overspend));
-		assert_eq!(expected, verifier.verify(&block.into()));
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert_eq!(expected, verifier.verify(&block.into(), &limits));
 	}
 
 	#[test]
@@ -348,7 +358,8 @@ mod tests {
 			.build();
 
 		let verifier = ChainVerifier::new(Arc::new(storage), Magic::Unitest);
-		assert!(verifier.verify(&block.into()).is_ok());
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert!(verifier.verify(&block.into(), &limits).is_ok());
 	}
 
 	#[test]
@@ -396,7 +407,8 @@ mod tests {
 
 		let verifier = ChainVerifier::new(Arc::new(storage), Magic::Unitest);
 		let expected = Err(Error::MaximumSigops);
-		assert_eq!(expected, verifier.verify(&block.into()));
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert_eq!(expected, verifier.verify(&block.into(), &limits));
 	}
 
 	#[test]
@@ -423,6 +435,7 @@ mod tests {
 			actual: 5000000001
 		});
 
-		assert_eq!(expected, verifier.verify(&block.into()));
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		assert_eq!(expected, verifier.verify(&block.into(), &limits));
 	}
 }

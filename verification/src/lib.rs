@@ -72,6 +72,7 @@ mod error;
 mod sigops;
 mod timestamp;
 mod work;
+mod consensus_limits;
 
 // pre-verification
 mod verify_block;
@@ -88,6 +89,8 @@ mod accept_transaction;
 // backwards compatibility
 mod chain_verifier;
 
+pub use consensus_limits::ConsensusLimitsRef;
+pub use consensus_limits::LegacyLimits;
 pub use primitives::{bigint, hash, compact};
 
 pub use canon::{CanonBlock, CanonHeader, CanonTransaction};
@@ -109,5 +112,5 @@ pub use work::{work_required, is_valid_proof_of_work, is_valid_proof_of_work_has
 
 /// Interface for block verification
 pub trait Verify : Send + Sync {
-	fn verify(&self, block: &chain::IndexedBlock) -> Result<(), Error>;
+	fn verify(&self, block: &chain::IndexedBlock, limits: &ConsensusLimitsRef) -> Result<(), Error>;
 }

@@ -10,6 +10,7 @@ use primitives::hash::H256;
 use verification::{BackwardsCompatibleChainVerifier as ChainVerifier, Verify as VerificationVerify};
 use types::{BlockHeight, StorageRef, MemoryPoolRef};
 use utils::MemoryPoolTransactionOutputProvider;
+use verification::ConsensusLimitsRef;
 
 /// Block verification events sink
 pub trait BlockVerificationSink : Send + Sync + 'static {
@@ -70,23 +71,23 @@ impl VerificationTask {
 
 impl AsyncVerifier {
 	/// Create new async verifier
-	pub fn new<T: VerificationSink>(verifier: Arc<ChainVerifier>, storage: StorageRef, memory_pool: MemoryPoolRef, sink: Arc<T>) -> Self {
+	pub fn new<T: VerificationSink>(verifier: Arc<ChainVerifier>, storage: StorageRef, memory_pool: MemoryPoolRef, sink: Arc<T>, limits: ConsensusLimitsRef) -> Self {
 		let (verification_work_sender, verification_work_receiver) = channel();
 		AsyncVerifier {
 			verification_work_sender: Mutex::new(verification_work_sender),
 			verification_worker_thread: Some(thread::Builder::new()
 				.name("Sync verification thread".to_string())
 				.spawn(move || {
-					AsyncVerifier::verification_worker_proc(sink, storage, memory_pool, verifier, verification_work_receiver)
+					AsyncVerifier::verification_worker_proc(sink, storage, memory_pool, verifier, verification_work_receiver, limits)
 				})
 				.expect("Error creating sync verification thread"))
 		}
 	}
 
 	/// Thread procedure for handling verification tasks
-	fn verification_worker_proc<T: VerificationSink>(sink: Arc<T>, storage: StorageRef, memory_pool: MemoryPoolRef, verifier: Arc<ChainVerifier>, work_receiver: Receiver<VerificationTask>) {
+	fn verification_worker_proc<T: VerificationSink>(sink: Arc<T>, storage: StorageRef, memory_pool: MemoryPoolRef, verifier: Arc<ChainVerifier>, work_receiver: Receiver<VerificationTask>, limits: ConsensusLimitsRef) {
 		while let Ok(task) = work_receiver.recv() {
-			if !AsyncVerifier::execute_single_task(&sink, &storage, &memory_pool, &verifier, task) {
+			if !AsyncVerifier::execute_single_task(&sink, &storage, &memory_pool, &verifier, task, &limits) {
 				break;
 			}
 		}
@@ -95,7 +96,7 @@ impl AsyncVerifier {
 	}
 
 	/// Execute single verification task
-	pub fn execute_single_task<T: VerificationSink>(sink: &Arc<T>, storage: &StorageRef, memory_pool: &MemoryPoolRef, verifier: &Arc<ChainVerifier>, task: VerificationTask) -> bool {
+	pub fn execute_single_task<T: VerificationSink>(sink: &Arc<T>, storage: &StorageRef, memory_pool: &MemoryPoolRef, verifier: &Arc<ChainVerifier>, task: VerificationTask, limits: &ConsensusLimitsRef) -> bool {
 		// block verification && insertion can lead to reorganization
 		// => transactions from decanonized blocks should be put back to the MemoryPool
 		// => they must be verified again
@@ -107,7 +108,7 @@ impl AsyncVerifier {
 			match task {
 				VerificationTask::VerifyBlock(block) => {
 					// verify block
-					match verifier.verify(&block) {
+					match verifier.verify(&block, limits) {
 						Ok(_) => {
 							if let Some(tasks) = sink.on_block_verification_success(block) {
 								tasks_queue.extend(tasks);
@@ -127,7 +128,7 @@ impl AsyncVerifier {
 						},
 						Ok(tx_output_provider) => {
 							let time: u32 = get_time().sec as u32;
-							match verifier.verify_mempool_transaction(&tx_output_provider, height, time, &transaction.raw) {
+							match verifier.verify_mempool_transaction(&tx_output_provider, height, time, &transaction.raw, limits) {
 								Ok(_) => sink.on_transaction_verification_success(transaction.into()),
 								Err(e) => sink.on_transaction_verification_error(&format!("{:?}", e), &transaction.hash),
 							}
@@ -178,15 +179,17 @@ pub struct SyncVerifier<T: VerificationSink> {
 	verifier: ChainVerifier,
 	/// Verification sink
 	sink: Arc<T>,
+    limits: Option<ConsensusLimitsRef>,
 }
 
 impl<T> SyncVerifier<T> where T: VerificationSink {
 	/// Create new sync verifier
-	pub fn new(network: Magic, storage: StorageRef, sink: Arc<T>) -> Self {
+	pub fn new(network: Magic, storage: StorageRef, sink: Arc<T>, limits: &ConsensusLimitsRef) -> Self {
 		let verifier = ChainVerifier::new(storage.clone(), network);
 		SyncVerifier {
 			verifier: verifier,
 			sink: sink,
+            limits : Some(limits.clone()),
 		}
 }
 	}
@@ -194,7 +197,7 @@ impl<T> SyncVerifier<T> where T: VerificationSink {
 impl<T> Verifier for SyncVerifier<T> where T: VerificationSink {
 	/// Verify block
 	fn verify_block(&self, block: IndexedBlock) {
-		match self.verifier.verify(&block) {
+		match self.verifier.verify(&block, self.limits.as_ref().unwrap()) {
 			Ok(_) => {
 				// SyncVerifier is used for bulk blocks import only
 				// => there are no memory pool
@@ -216,6 +219,7 @@ pub mod tests {
 	use std::sync::Arc;
 	use std::collections::{HashSet, HashMap};
 	use verification::BackwardsCompatibleChainVerifier as ChainVerifier;
+    use verification::ConsensusLimitsRef;
 	use synchronization_client_core::CoreVerificationSink;
 	use synchronization_executor::tests::DummyTaskExecutor;
 	use primitives::hash::H256;
@@ -231,6 +235,7 @@ pub mod tests {
 		storage: Option<StorageRef>,
 		memory_pool: Option<MemoryPoolRef>,
 		verifier: Option<Arc<ChainVerifier>>,
+        limits: Option<ConsensusLimitsRef>,
 	}
 
 	impl DummyVerifier {
@@ -257,6 +262,10 @@ pub mod tests {
 		pub fn actual_check_when_verifying(&mut self, hash: H256) {
 			self.actual_checks.insert(hash);
 		}
+
+        pub fn set_limits(&mut self, limits: ConsensusLimitsRef) {
+            self.limits = Some(limits);
+        }
 	}
 
 	impl Verifier for DummyVerifier {
@@ -266,7 +275,7 @@ pub mod tests {
 					Some(err) => sink.on_block_verification_error(&err, &block.hash()),
 					None => {
 						if self.actual_checks.contains(block.hash()) {
-							AsyncVerifier::execute_single_task(sink, self.storage.as_ref().unwrap(), self.memory_pool.as_ref().unwrap(), self.verifier.as_ref().unwrap(), VerificationTask::VerifyBlock(block));
+							AsyncVerifier::execute_single_task(sink, self.storage.as_ref().unwrap(), self.memory_pool.as_ref().unwrap(), self.verifier.as_ref().unwrap(), VerificationTask::VerifyBlock(block), self.limits.as_ref().unwrap());
 						} else {
 							sink.on_block_verification_success(block);
 						}
@@ -283,7 +292,7 @@ pub mod tests {
 					None => {
 						if self.actual_checks.contains(&transaction.hash) {
 							let next_block_height = self.storage.as_ref().unwrap().best_block().number + 1;
-							AsyncVerifier::execute_single_task(sink, self.storage.as_ref().unwrap(), self.memory_pool.as_ref().unwrap(), self.verifier.as_ref().unwrap(), VerificationTask::VerifyTransaction(next_block_height, transaction));
+							AsyncVerifier::execute_single_task(sink, self.storage.as_ref().unwrap(), self.memory_pool.as_ref().unwrap(), self.verifier.as_ref().unwrap(), VerificationTask::VerifyTransaction(next_block_height, transaction), self.limits.as_ref().unwrap());
 						} else {
 							sink.on_transaction_verification_success(transaction.into());
 						}

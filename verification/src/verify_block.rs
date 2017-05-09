@@ -3,7 +3,7 @@ use chain::IndexedBlock;
 use sigops::transaction_sigops;
 use duplex_store::NoopStore;
 use error::{Error, TransactionError};
-use constants::{MAX_BLOCK_SIZE, MAX_BLOCK_SIGOPS};
+use ConsensusLimitsRef;
 
 pub struct BlockVerifier<'a> {
 	pub empty: BlockEmpty<'a>,
@@ -16,14 +16,14 @@ pub struct BlockVerifier<'a> {
 }
 
 impl<'a> BlockVerifier<'a> {
-	pub fn new(block: &'a IndexedBlock) -> Self {
+	pub fn new(block: &'a IndexedBlock, limits: &ConsensusLimitsRef) -> Self {
 		BlockVerifier {
 			empty: BlockEmpty::new(block),
 			coinbase: BlockCoinbase::new(block),
-			serialized_size: BlockSerializedSize::new(block, MAX_BLOCK_SIZE),
+			serialized_size: BlockSerializedSize::new(block, limits.max_block_size()),
 			extra_coinbases: BlockExtraCoinbases::new(block),
 			transactions_uniqueness: BlockTransactionsUniqueness::new(block),
-			sigops: BlockSigops::new(block, MAX_BLOCK_SIGOPS),
+			sigops: BlockSigops::new(block, limits.max_block_sigops()),
 			merkle_root: BlockMerkleRoot::new(block),
 		}
 	}

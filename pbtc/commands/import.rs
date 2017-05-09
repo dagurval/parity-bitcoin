@@ -2,8 +2,9 @@ use clap::ArgMatches;
 use sync::{create_sync_blocks_writer, Error};
 use config::Config;
 use util::{open_db, init_db};
+use verification::ConsensusLimitsRef;
 
-pub fn import(cfg: Config, matches: &ArgMatches) -> Result<(), String> {
+pub fn import(cfg: Config, matches: &ArgMatches, limits: ConsensusLimitsRef) -> Result<(), String> {
 	let db = open_db(&cfg);
 	// TODO: this might be unnecessary here!
 	try!(init_db(&cfg, &db));
@@ -11,7 +12,7 @@ pub fn import(cfg: Config, matches: &ArgMatches) -> Result<(), String> {
 	let blk_path = matches.value_of("PATH").expect("PATH is required in cli.yml; qed");
 	let skip_verification = matches.is_present("skip-verification");
 
-	let mut writer = create_sync_blocks_writer(db, cfg.magic, !skip_verification);
+	let mut writer = create_sync_blocks_writer(db, cfg.magic, !skip_verification, &limits);
 
 	let blk_dir = try!(::import::open_blk_dir(blk_path).map_err(|_| "Import directory does not exist".to_owned()));
 	let mut counter = 0;

@@ -85,7 +85,7 @@ impl InboundSyncConnection for InboundConnection {
 	fn on_block(&self, message: types::Block) {
 		let block: IndexedBlock = message.block.into();
 		self.peers.hash_known_as(self.peer_index, block.hash().clone(), KnownHashType::Block);
-		self.node.on_block(self.peer_index, block);
+		self.node.on_block(self.peer_index, block)
 	}
 
 	fn on_headers(&self, message: types::Headers) {

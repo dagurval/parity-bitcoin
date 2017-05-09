@@ -44,6 +44,7 @@ use parking_lot::RwLock;
 use network::Magic;
 use primitives::hash::H256;
 use verification::BackwardsCompatibleChainVerifier as ChainVerifier;
+use verification::ConsensusLimitsRef;
 
 /// Sync errors.
 #[derive(Debug)]
@@ -65,8 +66,8 @@ pub trait SyncListener: Send + 'static {
 }
 
 /// Create blocks writer.
-pub fn create_sync_blocks_writer(db: db::SharedStore, network: Magic, verification: bool) -> blocks_writer::BlocksWriter {
-	blocks_writer::BlocksWriter::new(db, network, verification)
+pub fn create_sync_blocks_writer(db: db::SharedStore, network: Magic, verification: bool, limits: &ConsensusLimitsRef) -> blocks_writer::BlocksWriter {
+	blocks_writer::BlocksWriter::new(db, network, verification, limits)
 }
 
 /// Create synchronization peers
@@ -88,6 +89,7 @@ pub fn create_local_sync_node(network: Magic, db: db::SharedStore, peers: PeersR
 	use synchronization_verifier::AsyncVerifier;
 	use utils::SynchronizationState;
 	use types::SynchronizationStateRef;
+    use verification::LegacyLimits;
 
 	let sync_client_config = SynchronizationConfig {
 		network: network,
@@ -103,9 +105,10 @@ pub fn create_local_sync_node(network: Magic, db: db::SharedStore, peers: PeersR
 	let sync_server = Arc::new(ServerImpl::new(peers.clone(), db.clone(), memory_pool.clone(), sync_executor.clone()));
 	let sync_client_core = SynchronizationClientCore::new(sync_client_config, sync_state.clone(), peers.clone(), sync_executor.clone(), sync_chain, chain_verifier.clone());
 	let verifier_sink = Arc::new(CoreVerificationSink::new(sync_client_core.clone()));
-	let verifier = AsyncVerifier::new(chain_verifier, db.clone(), memory_pool.clone(), verifier_sink);
+    let consensus_limits = Arc::new(LegacyLimits::new());
+	let verifier = AsyncVerifier::new(chain_verifier, db.clone(), memory_pool.clone(), verifier_sink, consensus_limits.clone());
 	let sync_client = SynchronizationClient::new(sync_state.clone(), sync_client_core, verifier);
-	Arc::new(SyncNode::new(network, db, memory_pool, peers, sync_state, sync_executor, sync_client, sync_server))
+	Arc::new(SyncNode::new(network, db, memory_pool, peers, sync_state, sync_executor, sync_client, sync_server, consensus_limits))
 }
 
 /// Create inbound synchronization connections factory for given local sync node.

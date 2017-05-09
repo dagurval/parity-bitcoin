@@ -6,7 +6,7 @@ use duplex_store::DuplexTransactionOutputProvider;
 use deployments::Deployments;
 use sigops::transaction_sigops;
 use canon::CanonTransaction;
-use constants::{COINBASE_MATURITY, MAX_BLOCK_SIGOPS};
+use constants::{COINBASE_MATURITY};
 use error::TransactionError;
 
 pub struct TransactionAcceptor<'a> {
@@ -78,6 +78,7 @@ impl<'a> MemoryPoolTransactionAcceptor<'a> {
 		time: u32,
 		deployments: &'a Deployments,
 		headers: &'a BlockHeaderProvider,
+        max_block_sigops: usize
 	) -> Self {
 		trace!(target: "verification", "Mempool-Tx verification {}", transaction.hash.to_reversed_str());
 		let params = network.consensus_params();
@@ -86,7 +87,7 @@ impl<'a> MemoryPoolTransactionAcceptor<'a> {
 			missing_inputs: TransactionMissingInputs::new(transaction, output_store, transaction_index),
 			maturity: TransactionMaturity::new(transaction, meta_store, height),
 			overspent: TransactionOverspent::new(transaction, output_store),
-			sigops: TransactionSigops::new(transaction, output_store, params.clone(), MAX_BLOCK_SIGOPS, time),
+			sigops: TransactionSigops::new(transaction, output_store, params.clone(), max_block_sigops, time),
 			double_spent: TransactionDoubleSpend::new(transaction, output_store),
 			eval: TransactionEval::new(transaction, output_store, &params, height, time, deployments, headers),
 		}

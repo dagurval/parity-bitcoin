@@ -1186,6 +1186,7 @@ pub mod tests {
 	use network::Magic;
 	use primitives::hash::H256;
 	use verification::BackwardsCompatibleChainVerifier as ChainVerifier;
+    use verification::LegacyLimits;
 	use inbound_connection::tests::DummyOutboundSyncConnection;
 	use synchronization_chain::Chain;
 	use synchronization_client::{SynchronizationClient, Client};
@@ -1248,6 +1249,7 @@ pub mod tests {
 		verifier.set_storage(storage);
 		verifier.set_memory_pool(memory_pool);
 		verifier.set_verifier(chain_verifier);
+        verifier.set_limits(Arc::new(LegacyLimits::new()));
 
 		let client = SynchronizationClient::new(sync_state, client_core.clone(), verifier);
 		(executor, client_core, client)

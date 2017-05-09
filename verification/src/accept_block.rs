@@ -6,9 +6,9 @@ use work::block_reward_satoshi;
 use duplex_store::DuplexTransactionOutputProvider;
 use deployments::Deployments;
 use canon::CanonBlock;
-use constants::MAX_BLOCK_SIGOPS;
 use error::{Error, TransactionError};
 use timestamp::median_timestamp;
+use ConsensusLimitsRef;
 
 /// Flexible verification of ordered block
 pub struct BlockAcceptor<'a> {
@@ -26,13 +26,14 @@ impl<'a> BlockAcceptor<'a> {
 		height: u32,
 		deployments: &'a Deployments,
 		headers: &'a BlockHeaderProvider,
+        limits: &ConsensusLimitsRef
 	) -> Self {
 		let params = network.consensus_params();
 		BlockAcceptor {
 			finality: BlockFinality::new(block, height, deployments, headers, &params),
 			coinbase_script: BlockCoinbaseScript::new(block, &params, height),
 			coinbase_claim: BlockCoinbaseClaim::new(block, store, height),
-			sigops: BlockSigops::new(block, store, params, MAX_BLOCK_SIGOPS),
+			sigops: BlockSigops::new(block, store, params, limits.max_block_sigops())
 		}
 	}
 

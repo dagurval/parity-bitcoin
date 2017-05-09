@@ -15,6 +15,7 @@ use miner::BlockTemplate;
 use synchronization_peers::{TransactionAnnouncementType, BlockAnnouncementType};
 use types::{PeerIndex, RequestId, StorageRef, MemoryPoolRef, PeersRef, ExecutorRef,
 	ClientRef, ServerRef, SynchronizationStateRef, SyncListenerRef};
+use verification::ConsensusLimitsRef;
 
 /// Local synchronization node
 pub struct LocalNode<T: TaskExecutor, U: Server, V: Client> {
@@ -34,6 +35,8 @@ pub struct LocalNode<T: TaskExecutor, U: Server, V: Client> {
 	client: ClientRef<V>,
 	/// Synchronization server
 	server: ServerRef<U>,
+    /// Consensus limits for block and tx size
+    limits: ConsensusLimitsRef,
 }
 
 /// Transaction accept verification sink
@@ -51,7 +54,7 @@ impl<T, U, V> LocalNode<T, U, V> where T: TaskExecutor, U: Server, V: Client {
 	/// Create new synchronization node
 	#[cfg_attr(feature="cargo-clippy", allow(too_many_arguments))]
 	pub fn new(network: Magic, storage: StorageRef, memory_pool: MemoryPoolRef, peers: PeersRef,
-		state: SynchronizationStateRef, executor: ExecutorRef<T>, client: ClientRef<V>, server: ServerRef<U>) -> Self {
+		state: SynchronizationStateRef, executor: ExecutorRef<T>, client: ClientRef<V>, server: ServerRef<U>, limits: ConsensusLimitsRef) -> Self {
 		LocalNode {
 			network: network,
 			storage: storage,
@@ -61,6 +64,7 @@ impl<T, U, V> LocalNode<T, U, V> where T: TaskExecutor, U: Server, V: Client {
 			executor: executor,
 			client: client,
 			server: server,
+            limits: limits,
 		}
 	}
 
@@ -275,7 +279,7 @@ impl<T, U, V> LocalNode<T, U, V> where T: TaskExecutor, U: Server, V: Client {
 
 	/// Get block template for mining
 	pub fn get_block_template(&self) -> BlockTemplate {
-		let block_assembler = BlockAssembler::default();
+		let block_assembler = BlockAssembler::new(self.limits.max_block_size(), self.limits.max_block_sigops());
 		let memory_pool = &*self.memory_pool.read();
 		block_assembler.create_new_block(&self.storage, memory_pool, time::get_time().sec as u32, self.network)
 	}
@@ -345,6 +349,7 @@ pub mod tests {
 	use synchronization_verifier::tests::DummyVerifier;
 	use primitives::bytes::Bytes;
 	use verification::BackwardsCompatibleChainVerifier as ChainVerifier;
+    use verification::{ConsensusLimitsRef, LegacyLimits};
 	use std::iter::repeat;
 	use synchronization_peers::PeersImpl;
 	use utils::SynchronizationState;
@@ -382,7 +387,8 @@ pub mod tests {
 		};
 		verifier.set_sink(Arc::new(CoreVerificationSink::new(client_core.clone())));
 		let client = SynchronizationClient::new(sync_state.clone(), client_core, verifier);
-		let local_node = LocalNode::new(Magic::Mainnet, storage, memory_pool, sync_peers, sync_state, executor.clone(), client, server.clone());
+        let limits = Arc::new(LegacyLimits::new()) as ConsensusLimitsRef;
+		let local_node = LocalNode::new(Magic::Mainnet, storage, memory_pool, sync_peers, sync_state, executor.clone(), client, server.clone(), limits.clone());
 		(executor, server, local_node)
 	}
 
